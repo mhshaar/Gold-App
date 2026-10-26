@@ -3,12 +3,13 @@ from fastapi.responses import HTMLResponse
 import uvicorn, urllib.request, json, math, random, time, requests, os
 from datetime import datetime, timedelta
 
-app = FastAPI(title="Gold AI Analyzer v6.2", version="6.2")
+app = FastAPI(title="Gold AI Analyzer v6.3", version="6.3")
 
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
 
 _cache = {}
 _cache_time = {}
+
 
 def get_live_gold_price():
     try:
@@ -21,6 +22,7 @@ def get_live_gold_price():
     except Exception:
         pass
     return None
+
 
 def _fetch_twelvedata(interval, limit=200):
     now = time.time()
@@ -53,6 +55,7 @@ def _fetch_twelvedata(interval, limit=200):
     except Exception:
         return None
 
+
 def _synthetic(interval, limit, base_price):
     base_price = base_price or 2000.0
     step = {"M5": 300, "M15": 900, "H1": 3600, "H4": 14400}.get(interval, 900)
@@ -70,15 +73,18 @@ def _synthetic(interval, limit, base_price):
         hi = max(op, close) + abs(rnd.gauss(0, vol * 0.5))
         lo = min(op, close) - abs(rnd.gauss(0, vol * 0.5))
         ts = now - timedelta(seconds=step * (n - 1 - i))
-        out.append({"time": ts.isoformat(), "open": round(op, 2), "high": round(hi, 2), "low": round(lo, 2), "close": round(close, 2)})
+        out.append({"time": ts.isoformat(), "open": round(op, 2), "high": round(hi, 2), "low": round(lo, 2),
+                    "close": round(close, 2)})
     out[-1]["close"] = round(base_price, 2)
     return out
+
 
 def fetch_candles(interval, limit=200, base_price=None):
     c = _fetch_twelvedata(interval, limit)
     if c and len(c) >= 60:
         return c, "live"
     return _synthetic(interval, limit, base_price), "synthetic"
+
 
 def ema(values, period):
     if not values: return []
@@ -87,13 +93,15 @@ def ema(values, period):
     for v in values[1:]: out.append(v * k + out[-1] * (1 - k))
     return out
 
+
 def rsi(closes, period=14):
     if len(closes) < period + 1: return [50.0] * len(closes)
     out = [50.0] * len(closes)
     gains, losses = [], []
     for i in range(1, len(closes)):
         d = closes[i] - closes[i - 1]
-        gains.append(max(d, 0.0)); losses.append(max(-d, 0.0))
+        gains.append(max(d, 0.0));
+        losses.append(max(-d, 0.0))
     ag, al = sum(gains[:period]) / period, sum(losses[:period]) / period
     out[period] = 100 - 100 / (1 + (ag / al if al else 100))
     for i in range(period + 1, len(closes)):
@@ -103,22 +111,25 @@ def rsi(closes, period=14):
         out[i] = 100 - 100 / (1 + (ag / al if al else 100))
     return out
 
+
 def macd(closes, f=12, s=26, sig=9):
-    if len(closes) < s + sig: return [0.0]*len(closes), [0.0]*len(closes), [0.0]*len(closes)
+    if len(closes) < s + sig: return [0.0] * len(closes), [0.0] * len(closes), [0.0] * len(closes)
     ef, es = ema(closes, f), ema(closes, s)
     line = [a - b for a, b in zip(ef, es)]
     signal = ema(line, sig)
     hist = [a - b for a, b in zip(line, signal)]
     return line, signal, hist
 
+
 def atr(candles, period=14):
     if len(candles) < 2: return 1.0
     trs = []
     for i in range(1, len(candles)):
-        h, l, pc = candles[i]["high"], candles[i]["low"], candles[i-1]["close"]
+        h, l, pc = candles[i]["high"], candles[i]["low"], candles[i - 1]["close"]
         trs.append(max(h - l, abs(h - pc), abs(l - pc)))
     window = trs[-period:] if len(trs) >= period else trs
     return sum(window) / len(window)
+
 
 def analyze_timeframe(candles, tf_name):
     closes = [c["close"] for c in candles]
@@ -129,14 +140,22 @@ def analyze_timeframe(candles, tf_name):
     a = atr(candles)
 
     score = 0
-    if e9 > e21: score += 1
-    elif e9 < e21: score -= 1
-    if e21 > e50: score += 1
-    elif e21 < e50: score -= 1
-    if r > 55: score += 1
-    elif r < 45: score -= 1
-    if hist[-1] > 0: score += 1
-    elif hist[-1] < 0: score -= 1
+    if e9 > e21:
+        score += 1
+    elif e9 < e21:
+        score -= 1
+    if e21 > e50:
+        score += 1
+    elif e21 < e50:
+        score -= 1
+    if r > 55:
+        score += 1
+    elif r < 45:
+        score -= 1
+    if hist[-1] > 0:
+        score += 1
+    elif hist[-1] < 0:
+        score -= 1
 
     bias = "bullish" if score >= 2 else "bearish" if score <= -2 else "neutral"
     return {
@@ -145,6 +164,7 @@ def analyze_timeframe(candles, tf_name):
         "ema200": round(e200, 2), "rsi": round(r, 2), "macd_hist": round(hist[-1], 4),
         "atr": round(a, 2), "bias": bias, "score": score
     }
+
 
 def build_decision(per_tf, live_price, data_source):
     weights = {"H4": 2.0, "H1": 1.5, "M15": 1.0, "M5": 0.7}
@@ -169,14 +189,14 @@ def build_decision(per_tf, live_price, data_source):
 
     if composite >= 0.6 and trend_up:
         signal = "BUY"
-        sl  = round(price - 1.5 * atr_val, 2)
+        sl = round(price - 1.5 * atr_val, 2)
         tp1 = round(price + 1.5 * atr_val, 2)
         tp2 = round(price + 3.0 * atr_val, 2)
         tp3 = round(price + 4.5 * atr_val, 2)
         confidence = min(95, int(50 + composite * 25))
     elif composite <= -0.6 and trend_down:
         signal = "SELL"
-        sl  = round(price + 1.5 * atr_val, 2)
+        sl = round(price + 1.5 * atr_val, 2)
         tp1 = round(price - 1.5 * atr_val, 2)
         tp2 = round(price - 3.0 * atr_val, 2)
         tp3 = round(price - 4.5 * atr_val, 2)
@@ -188,8 +208,11 @@ def build_decision(per_tf, live_price, data_source):
         "atr_h1": round(atr_val, 2), "data_source": data_source,
     }
 
+
 @app.get("/manifest.json")
 def get_manifest():
+    # تم استخدام أيقونة مشفرة (Base64) لضمان عدم فشل التحميل
+    icon_base64 = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48Y2lyY2xlIGN4PSI1MCIgY3k9IjUwIiByPSI0NSIgZmlsbD0iI2ZmODgwMCIvPjx0ZXh0IHg9IjUwIiB5PSI2NSIgZm9udC1zaXplPSI1MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iI2ZmZiI+8J+UqjwvdGV4dD48L3N2Zz4="
     return {
         "name": "TRADLI Gold",
         "short_name": "TRADLI",
@@ -198,28 +221,33 @@ def get_manifest():
         "background_color": "#0b0e14",
         "theme_color": "#ff8800",
         "icons": [
-            {"src": "https://cdn-icons-png.flaticon.com/192/2661/2661771.png", "sizes": "192x192", "type": "image/png"},
-            {"src": "https://cdn-icons-png.flaticon.com/512/2661/2661771.png", "sizes": "512x512", "type": "image/png"}
+            {"src": icon_base64, "sizes": "192x192", "type": "image/svg+xml"},
+            {"src": icon_base64, "sizes": "512x512", "type": "image/svg+xml"}
         ]
     }
 
-# 🌟 هذا هو ملف الـ Service Worker الذي يجبر كروم على التثبيت
+
 @app.get("/sw.js")
 def get_sw():
     sw_code = """
     self.addEventListener('install', (e) => {
       self.skipWaiting();
     });
+    self.addEventListener('activate', (e) => {
+      e.waitUntil(clients.claim());
+    });
     self.addEventListener('fetch', (e) => {
-      // نمرر الطلبات للسيرفر مباشرة
+      // Let the network handle all requests normally
     });
     """
     return Response(content=sw_code, media_type="application/javascript")
+
 
 @app.get("/api/price")
 def api_price():
     p = get_live_gold_price()
     return {"price": p, "source": "gold-api.com" if p else "unavailable"}
+
 
 @app.get("/api/analyze")
 def api_analyze(tf: str = "M15"):
@@ -234,9 +262,11 @@ def api_analyze(tf: str = "M15"):
     data_source = "live" if "live" in sources else "synthetic"
     return build_decision(per_tf, live, data_source)
 
+
 @app.get("/", response_class=HTMLResponse)
 def read_root():
     return HTML
+
 
 HTML = """
 <!DOCTYPE html>
@@ -245,6 +275,7 @@ HTML = """
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#ff8800">
 <title>TRADLI v6</title>
 <style>
 body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padding:20px}
@@ -260,9 +291,9 @@ h2{margin-top:0}
 <div class="container">
   <h2>🏆 Gold AI Analyzer v6</h2>
   <div style="font-size:12px;color:#8b949e;margin-bottom:15px">Live Price: <span style="color:#e3b341;font-weight:bold" id="livePrice">--</span></div>
-  
+
   <button class="btn" onclick="startAnalysis()">📍 بدء التحليل الذكي (مع فلتر الترند)</button>
-  
+
   <div id="result" class="card">
     <div style="text-align:center;margin-bottom:15px"><span id="signalBadge" style="background:#444;padding:6px 20px;border-radius:20px;font-weight:bold;font-size:16px">--</span></div>
     <div class="row"><span>سعر الدخول:</span> <b id="entry" style="color:#e3b341">--</b></div>
@@ -274,11 +305,8 @@ h2{margin-top:0}
   </div>
 </div>
 <script>
-// تسجيل ملف الـ Service Worker لجعله قابلاً للتثبيت
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js')
-    .then(() => console.log('SW Registered'))
-    .catch(err => console.log('SW Error', err));
+  navigator.serviceWorker.register('/sw.js');
 }
 
 setInterval(async()=>{
@@ -294,19 +322,19 @@ async function startAnalysis(){
       let r=await fetch('/api/analyze'); 
       let d=await r.json();
       let b=document.getElementById('signalBadge');
-      
+
       b.innerText = d.signal==='BUY'?'شراء BUY':d.signal==='SELL'?'بيع SELL':'انتظار WAIT';
       b.style.background = d.signal==='BUY'?'#238636':d.signal==='SELL'?'#da3633':'#484f58';
-      
+
       const fmt = (val) => (val && val !== 0) ? '$' + val : '--';
-      
+
       document.getElementById('entry').innerText = fmt(d.entry_price);
       document.getElementById('sl').innerText = fmt(d.stop_loss);
       document.getElementById('tp1').innerText = fmt(d.tp1);
       document.getElementById('tp2').innerText = fmt(d.tp2);
       document.getElementById('tp3').innerText = fmt(d.tp3);
       document.getElementById('src').innerText = d.data_source==='live'?'Twelve Data ✅':'محاكاة ⚠️';
-      
+
       document.getElementById('result').style.display='block';
   }catch(e){
       alert("حدث خطأ في الاتصال بالسيرفر.");
