@@ -1,12 +1,9 @@
-"""
-Gold AI Analyzer v6.1 — PWA Enabled
-"""
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
 import uvicorn, urllib.request, json, math, random, time, requests, os
 from datetime import datetime, timedelta
 
-app = FastAPI(title="Gold AI Analyzer v6.1", version="6.1")
+app = FastAPI(title="Gold AI Analyzer v6.2", version="6.2")
 
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
 
@@ -200,8 +197,24 @@ def get_manifest():
         "display": "standalone",
         "background_color": "#0b0e14",
         "theme_color": "#ff8800",
-        "icons": [{"src": "https://cdn-icons-png.flaticon.com/512/2661/2661771.png", "sizes": "512x512", "type": "image/png"}]
+        "icons": [
+            {"src": "https://cdn-icons-png.flaticon.com/192/2661/2661771.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "https://cdn-icons-png.flaticon.com/512/2661/2661771.png", "sizes": "512x512", "type": "image/png"}
+        ]
     }
+
+# 🌟 هذا هو ملف الـ Service Worker الذي يجبر كروم على التثبيت
+@app.get("/sw.js")
+def get_sw():
+    sw_code = """
+    self.addEventListener('install', (e) => {
+      self.skipWaiting();
+    });
+    self.addEventListener('fetch', (e) => {
+      // نمرر الطلبات للسيرفر مباشرة
+    });
+    """
+    return Response(content=sw_code, media_type="application/javascript")
 
 @app.get("/api/price")
 def api_price():
@@ -261,6 +274,13 @@ h2{margin-top:0}
   </div>
 </div>
 <script>
+// تسجيل ملف الـ Service Worker لجعله قابلاً للتثبيت
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then(() => console.log('SW Registered'))
+    .catch(err => console.log('SW Error', err));
+}
+
 setInterval(async()=>{
     try{
         let r=await fetch('/api/price');
