@@ -1,13 +1,12 @@
 """
-Gold AI Analyzer v6.0 — Trend Filtered Strategy
+Gold AI Analyzer v6.1 — PWA Enabled
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
 import uvicorn, urllib.request, json, math, random, time, requests, os
-import uvicorn, urllib.request, json, math, random, time, requests
 from datetime import datetime, timedelta
 
-app = FastAPI(title="Gold AI Analyzer v6.0", version="6.0")
+app = FastAPI(title="Gold AI Analyzer v6.1", version="6.1")
 
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
 
@@ -133,27 +132,21 @@ def analyze_timeframe(candles, tf_name):
     a = atr(candles)
 
     score = 0
-    reasons = []
-
-    if e9 > e21: score += 1; reasons.append("EMA9 > EMA21")
-    elif e9 < e21: score -= 1; reasons.append("EMA9 < EMA21")
-
-    if e21 > e50: score += 1; reasons.append("EMA21 > EMA50")
-    elif e21 < e50: score -= 1; reasons.append("EMA21 < EMA50")
-
-    if r > 55: score += 1; reasons.append(f"RSI={r:.1f} إيجابي")
-    elif r < 45: score -= 1; reasons.append(f"RSI={r:.1f} سلبي")
-
-    if hist[-1] > 0: score += 1; reasons.append("MACD إيجابي")
-    elif hist[-1] < 0: score -= 1; reasons.append("MACD سلبي")
+    if e9 > e21: score += 1
+    elif e9 < e21: score -= 1
+    if e21 > e50: score += 1
+    elif e21 < e50: score -= 1
+    if r > 55: score += 1
+    elif r < 45: score -= 1
+    if hist[-1] > 0: score += 1
+    elif hist[-1] < 0: score -= 1
 
     bias = "bullish" if score >= 2 else "bearish" if score <= -2 else "neutral"
     return {
         "timeframe": tf_name, "last_price": round(closes[-1], 2),
         "ema9": round(e9, 2), "ema21": round(e21, 2), "ema50": round(e50, 2),
-        "ema200": round(e200, 2),
-        "rsi": round(r, 2), "macd_hist": round(hist[-1], 4),
-        "atr": round(a, 2), "bias": bias, "score": score, "reasons": reasons,
+        "ema200": round(e200, 2), "rsi": round(r, 2), "macd_hist": round(hist[-1], 4),
+        "atr": round(a, 2), "bias": bias, "score": score
     }
 
 def build_decision(per_tf, live_price, data_source):
@@ -175,9 +168,6 @@ def build_decision(per_tf, live_price, data_source):
 
     signal = "WAIT"
     confidence = 20
-    agree_with = None
-
-    # جعل القيم 0.0 بدلاً من None لتجنب مشكلة null في الواجهة
     sl = tp1 = tp2 = tp3 = 0.0
 
     if composite >= 0.6 and trend_up:
@@ -187,7 +177,6 @@ def build_decision(per_tf, live_price, data_source):
         tp2 = round(price + 3.0 * atr_val, 2)
         tp3 = round(price + 4.5 * atr_val, 2)
         confidence = min(95, int(50 + composite * 25))
-        agree_with = "bullish"
     elif composite <= -0.6 and trend_down:
         signal = "SELL"
         sl  = round(price + 1.5 * atr_val, 2)
@@ -195,19 +184,23 @@ def build_decision(per_tf, live_price, data_source):
         tp2 = round(price - 3.0 * atr_val, 2)
         tp3 = round(price - 4.5 * atr_val, 2)
         confidence = min(95, int(50 + abs(composite) * 25))
-        agree_with = "bearish"
-
-    agree = sum(1 for d in per_tf.values() if d["bias"] == agree_with)
 
     return {
         "symbol": "XAU/USD", "signal": signal, "confidence": confidence,
-        "composite_score": round(composite, 2), "entry_price": round(price, 2),
-        "stop_loss": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
-        "atr_h1": round(atr_val, 2),
-        "confluence": f"{agree}/{len(per_tf)}",
-        "data_source": data_source,
-        "timeframes": per_tf,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "entry_price": round(price, 2), "stop_loss": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
+        "atr_h1": round(atr_val, 2), "data_source": data_source,
+    }
+
+@app.get("/manifest.json")
+def get_manifest():
+    return {
+        "name": "TRADLI Gold",
+        "short_name": "TRADLI",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0b0e14",
+        "theme_color": "#ff8800",
+        "icons": [{"src": "https://cdn-icons-png.flaticon.com/512/2661/2661771.png", "sizes": "512x512", "type": "image/png"}]
     }
 
 @app.get("/api/price")
@@ -226,10 +219,7 @@ def api_analyze(tf: str = "M15"):
         per_tf[t] = analyze_timeframe(candles, t)
 
     data_source = "live" if "live" in sources else "synthetic"
-    decision = build_decision(per_tf, live, data_source)
-    decision["selected_tf"] = tf if tf in per_tf else "M15"
-    decision["selected_detail"] = per_tf[decision["selected_tf"]]
-    return decision
+    return build_decision(per_tf, live, data_source)
 
 @app.get("/", response_class=HTMLResponse)
 def read_root():
@@ -238,7 +228,11 @@ def read_root():
 HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
-<head><meta charset="UTF-8"><title>TRADLI v6</title>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="/manifest.json">
+<title>TRADLI v6</title>
 <style>
 body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padding:20px}
 .container{max-width:420px;margin:auto;background:#161b22;border-radius:16px;padding:20px;box-shadow:0 4px 15px rgba(0,0,0,0.5)}
@@ -284,7 +278,6 @@ async function startAnalysis(){
       b.innerText = d.signal==='BUY'?'شراء BUY':d.signal==='SELL'?'بيع SELL':'انتظار WAIT';
       b.style.background = d.signal==='BUY'?'#238636':d.signal==='SELL'?'#da3633':'#484f58';
       
-      // إذا كانت القيمة صفر، سيتم عرض شرطة --
       const fmt = (val) => (val && val !== 0) ? '$' + val : '--';
       
       document.getElementById('entry').innerText = fmt(d.entry_price);
@@ -303,5 +296,4 @@ async function startAnalysis(){
 """
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("gold_analyzer:app", host="0.0.0.0", port=port)
+    uvicorn.run("gold_analyzer:app", host="0.0.0.0", port=8000)
