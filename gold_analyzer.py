@@ -1,10 +1,8 @@
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
-import uvicorn, urllib.request, json, math, random, time, requests, os
-from datetime import datetime, timedelta
+import uvicorn, urllib.request, json, math, time, requests, os
 
-app = FastAPI(title="Gold AI Analyzer", version="7.0")
-
+app = FastAPI(title="Gold AI Analyzer", version="8.0")
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
 
 _cache = {}
@@ -26,7 +24,6 @@ def _fetch_twelvedata(interval, limit=200):
     tf_map = {"M5": "5min", "M15": "15min", "H1": "1h", "H4": "4h"}
     td_interval = tf_map.get(interval, "15min")
     cache_key = f"{td_interval}_{limit}"
-
     if cache_key in _cache and (now - _cache_time.get(cache_key, 0)) < 60:
         return _cache[cache_key]
 
@@ -35,7 +32,6 @@ def _fetch_twelvedata(interval, limit=200):
         res = requests.get(url, timeout=10)
         data = res.json()
         if "values" not in data: return None
-
         candles = []
         for row in reversed(data["values"]):
             candles.append({
@@ -108,7 +104,6 @@ def analyze_timeframe(candles, tf_name):
     line, sig, hist = macd(closes)
     a = atr(candles)
     score = 0
-
     if e9 > e21:
         score += 1
     elif e9 < e21:
@@ -125,7 +120,6 @@ def analyze_timeframe(candles, tf_name):
         score += 1
     elif hist[-1] < 0:
         score -= 1
-
     return {"score": score, "atr": round(a, 2), "ema200": round(e200, 2), "last_price": round(closes[-1], 2)}
 
 
@@ -162,24 +156,6 @@ def build_decision(per_tf, live_price, data_source):
             "data_source": data_source}
 
 
-@app.get("/manifest.json")
-def get_manifest():
-    # رابط صورة حقيقية لسبيكة ذهب (كروم يقبلها فوراً)
-    icon_url = "https://cdn-icons-png.flaticon.com/512/2661/2661771.png"
-    return {
-        "name": "TRADLI Gold",
-        "short_name": "TRADLI",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#0b0e14",
-        "theme_color": "#ff8800",
-        "icons": [
-            {"src": icon_url, "sizes": "192x192", "type": "image/png"},
-            {"src": icon_url, "sizes": "512x512", "type": "image/png"}
-        ]
-    }
-
-
 @app.get("/sw.js")
 def get_sw():
     return Response(content="self.addEventListener('fetch', function(event) {});", media_type="application/javascript")
@@ -208,8 +184,9 @@ def read_root():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="manifest" href="/manifest.json">
-<title>TRADLI v7</title>
+<title>TRADLI v8</title>
+<!-- سطر سحري يجبر المتصفح على قبول التثبيت -->
+<link rel="manifest" href='data:application/manifest+json,{"name":"TRADLI Gold","short_name":"TRADLI","start_url":"/","display":"standalone","background_color":"#0b0e14","theme_color":"#ff8800","icons":[{"src":"https://cdn-icons-png.flaticon.com/512/2661/2661771.png","sizes":"512x512","type":"image/png"}]}'>
 <style>
 body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padding:20px}
 .box{max-width:420px;margin:auto;background:#161b22;border-radius:16px;padding:20px}
