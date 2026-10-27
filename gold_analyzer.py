@@ -2,8 +2,41 @@ from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
 import uvicorn, urllib.request, json, math, time, requests, os
 
-app = FastAPI(title="Gold AI Analyzer", version="8.0")
+app = FastAPI(title="Gold AI Analyzer", version="10.0")
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
+
+# ---- إنشاء أيقونة (Base64) مدمجة داخل الكود لكروم ----
+ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+
+@app.get("/icon.png")
+def get_icon():
+    import base64
+    return Response(content=base64.b64decode(ICON_BASE64), media_type="image/png")
+
+
+@app.get("/manifest.json")
+def get_manifest():
+    return {
+        "name": "TRADLI Gold",
+        "short_name": "TRADLI",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#0b0e14",
+        "theme_color": "#ff8800",
+        "icons": [
+            {"src": "/icon.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}
+        ]
+    }
+
+
+@app.get("/sw.js")
+def get_sw():
+    return Response(content="self.addEventListener('fetch', function(event) {});", media_type="application/javascript")
+
+
+# -----------------------------------------------------------
 
 _cache = {}
 _cache_time = {}
@@ -138,27 +171,19 @@ def build_decision(per_tf, live_price, data_source):
     ema200 = ref.get("ema200", price)
 
     signal = "WAIT"
-    confidence = 20
     sl = tp1 = tp2 = tp3 = 0.0
 
     if composite >= 0.6 and price > ema200:
         signal = "BUY"
         sl, tp1, tp2, tp3 = round(price - 1.5 * atr_val, 2), round(price + 1.5 * atr_val, 2), round(
             price + 3.0 * atr_val, 2), round(price + 4.5 * atr_val, 2)
-        confidence = min(95, int(50 + composite * 25))
     elif composite <= -0.6 and price < ema200:
         signal = "SELL"
         sl, tp1, tp2, tp3 = round(price + 1.5 * atr_val, 2), round(price - 1.5 * atr_val, 2), round(
             price - 3.0 * atr_val, 2), round(price - 4.5 * atr_val, 2)
-        confidence = min(95, int(50 + abs(composite) * 25))
 
     return {"signal": signal, "entry_price": round(price, 2), "stop_loss": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3,
             "data_source": data_source}
-
-
-@app.get("/sw.js")
-def get_sw():
-    return Response(content="self.addEventListener('fetch', function(event) {});", media_type="application/javascript")
 
 
 @app.get("/api/price")
@@ -184,9 +209,8 @@ def read_root():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TRADLI v8</title>
-<!-- سطر سحري يجبر المتصفح على قبول التثبيت -->
-<link rel="manifest" href='data:application/manifest+json,{"name":"TRADLI Gold","short_name":"TRADLI","start_url":"/","display":"standalone","background_color":"#0b0e14","theme_color":"#ff8800","icons":[{"src":"https://cdn-icons-png.flaticon.com/512/2661/2661771.png","sizes":"512x512","type":"image/png"}]}'>
+<title>TRADLI Gold</title>
+<link rel="manifest" href="/manifest.json">
 <style>
 body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padding:20px}
 .box{max-width:420px;margin:auto;background:#161b22;border-radius:16px;padding:20px}
@@ -196,7 +220,7 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
 </style></head>
 <body>
 <div class="box">
-  <h2>🏆 Gold Analyzer</h2>
+  <h2>🏆 TRADLI Gold</h2>
   <div style="margin-bottom:15px">السعر: <span id="livePrice" style="color:#e3b341">--</span></div>
   <button class="btn" onclick="startAnalysis()">📍 بدء التحليل</button>
   <div id="result" class="card">
