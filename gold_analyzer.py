@@ -5,8 +5,8 @@ import uvicorn, urllib.request, json, math, time, requests, os
 app = FastAPI(title="Gold AI Analyzer Pro", version="11.0")
 
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8335178828:AAEkQbg_5cSEuzFxJh1DUmILwfMuZyt7STA")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "5432033233")
 
 ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
