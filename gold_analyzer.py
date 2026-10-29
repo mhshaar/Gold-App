@@ -4,7 +4,12 @@ import uvicorn, urllib.request, json, math, time, requests, os, zlib, struct
 
 app = FastAPI(title="TRADLI Gold Pro", version="13.1")
 
-TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
+TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "b030692aee1d429eb2e33a1ac73bd322")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8752903788:AAGVbBl7Tltc34iR15BaohLYktEhRLaRaBY")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "5432033233")
+
+_last_decision = {}
+_last_telegram_time = 0.0
 
 _cache = {}
 _cache_time = {}
@@ -369,7 +374,49 @@ def api_analyze():
     for t in ("H4", "H1", "M15", "M5"):
         candles, _ = fetch_candles(t, 250, live)
         per_tf[t] = analyze_timeframe(candles, t)
-    return build_decision(per_tf, live, "live")
+    decision = build_decision(per_tf, live, "live")
+    _last_decision.clear()
+    _last_decision.update(decision)
+    return decision
+
+
+@app.post("/api/telegram")
+def send_telegram():
+    global _last_telegram_time
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return {"status": "error", "message": "لم يتم إعداد التليجرام في الاستضافة (TELEGRAM_BOT_TOKEN و TELEGRAM_CHAT_ID)"}
+
+    d = _last_decision
+    if not d or d.get("signal") not in ("BUY", "SELL"):
+        return {"status": "error", "message": "لا توجد إشارة شراء أو بيع لإرسالها. اضغط بدء التحليل أولًا."}
+
+    now = time.time()
+    if now - _last_telegram_time < 20:
+        return {"status": "error", "message": "انتظر 20 ثانية قبل إرسال إشارة أخرى."}
+
+    icon = "🟢 شراء (BUY)" if d["signal"] == "BUY" else "🔴 بيع (SELL)"
+    msg = (
+        "🏆 إشارة تداول الذهب 🏆\n\n"
+        f"الاتجاه: {icon}\n"
+        f"سعر الدخول: {d['entry_price']}\n"
+        f"وقف الخسارة: {d['stop_loss']}\n"
+        f"الهدف الأول: {d['tp1']}\n"
+        f"الهدف الثاني: {d['tp2']}\n"
+        f"الهدف الثالث: {d['tp3']}\n"
+        f"الدعم: {d['support']} | المقاومة: {d['resistance']}\n\n"
+        "بالتوفيق! 🚀"
+    )
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        res = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=8)
+        data = res.json()
+        if data.get("ok"):
+            _last_telegram_time = now
+            return {"status": "success"}
+        return {"status": "error", "message": "تليجرام رفض الرسالة: " + str(data.get("description", "خطأ غير معروف"))}
+    except Exception as e:
+        return {"status": "error", "message": "تعذر الاتصال بتليجرام: " + str(e)}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -394,6 +441,7 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
 .btn{background:linear-gradient(90deg,#ff6b00,#ff8800);color:#fff;padding:12px;border:none;border-radius:8px;width:100%;font-size:16px;font-weight:bold;cursor:pointer;margin-bottom:10px}
 .btn:active{transform:scale(0.98)}
 #installBtn{display:none;background:linear-gradient(90deg,#238636,#2ea043)}
+.telegram-btn{background:#0088cc;color:#fff;padding:12px;border:none;border-radius:8px;width:100%;font-size:15px;font-weight:bold;cursor:pointer;margin-top:15px;display:none}
 .card{display:none;margin-top:15px;background:#0d1117;padding:15px;border-radius:10px;text-align:right}
 .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #21262d;font-size:14px}
 .row:last-child{border-bottom:none}
@@ -435,6 +483,8 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
       <button onclick="calcLot()">حساب حجم العقد (اللوت)</button>
       <div id="lotResult" style="margin-top:10px;font-weight:bold;color:#3fb950;text-align:center"></div>
     </div>
+
+    <button class="telegram-btn" id="telegramBtn" onclick="sendTelegram()">✈️ إرسال الإشارة إلى التليجرام</button>
   </div>
 </div>
 
@@ -506,6 +556,10 @@ async function startAnalysis(){
   }
 
   document.getElementById('calcBox').style.display = (d.signal !== 'WAIT') ? 'block' : 'none';
+  let tb = document.getElementById('telegramBtn');
+  tb.style.display = (d.signal !== 'WAIT') ? 'block' : 'none';
+  tb.innerText = "✈️ إرسال الإشارة إلى التليجرام";
+  tb.style.background = "#0088cc";
   document.getElementById('result').style.display='block';
 }
 
@@ -519,6 +573,26 @@ function calcLot(){
   if(distance === 0) return;
   let lotSize = riskAmount / (distance * 100);
   document.getElementById('lotResult').innerText = "حجم العقد المناسب: " + lotSize.toFixed(2) + " لوت";
+}
+
+async function sendTelegram(){
+  if(!currentData || currentData.signal === 'WAIT') return;
+  let btn = document.getElementById('telegramBtn');
+  btn.innerText = "جاري الإرسال...";
+  try{
+    let r = await fetch('/api/telegram', {method:'POST'});
+    let d = await r.json();
+    if(d.status === 'success'){
+      btn.innerText = "✅ تم الإرسال بنجاح!";
+      btn.style.background = "#238636";
+    } else {
+      alert("خطأ: " + d.message);
+      btn.innerText = "✈️ إعادة المحاولة";
+    }
+  }catch(e){
+    alert("خطأ في الاتصال: " + e.message);
+    btn.innerText = "✈️ إعادة المحاولة";
+  }
 }
 </script></body></html>
 """
