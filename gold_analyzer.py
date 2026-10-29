@@ -2,12 +2,9 @@ from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
 import uvicorn, urllib.request, json, math, time, requests, os
 
-app = FastAPI(title="Gold AI Analyzer Pro", version="11.0")
+app = FastAPI(title="Gold AI Analyzer Pro", version="13.0")
 
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-
 ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 
@@ -86,6 +83,11 @@ def ema(values, period):
     return out
 
 
+def sma(values, period):
+    if len(values) < period: return values[-1]
+    return sum(values[-period:]) / period
+
+
 def rsi(closes, period=14):
     if len(closes) < period + 1: return [50.0] * len(closes)
     out = [50.0] * len(closes)
@@ -124,7 +126,6 @@ def atr(candles, period=14):
 
 
 def get_support_resistance(candles):
-    # نبحث عن أعلى وأدنى سعر في آخر 50 شمعة
     recent = candles[-50:]
     resistance = max(c["high"] for c in recent)
     support = min(c["low"] for c in recent)
@@ -133,6 +134,13 @@ def get_support_resistance(candles):
 
 def analyze_timeframe(candles, tf_name):
     closes = [c["close"] for c in candles]
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+
+    last = candles[-1]
+    curr_range = last["high"] - last["low"]
+    if curr_range == 0: curr_range = 0.0001
+
     e9, e21, e50 = (ema(closes, p)[-1] for p in (9, 21, 50))
     e200 = ema(closes, 200)[-1] if len(closes) >= 200 else closes[0]
     r = rsi(closes)[-1]
@@ -140,32 +148,59 @@ def analyze_timeframe(candles, tf_name):
     a = atr(candles)
     sup, res = get_support_resistance(candles)
 
+    upper_band = sma(highs, 20) + (a * 0.5)
+    lower_band = sma(lows, 20) - (a * 0.5)
+
+    lower_wick = min(last["open"], last["close"]) - last["low"]
+    upper_wick = last["high"] - max(last["open"], last["close"])
+    wick_ratio_buy = lower_wick / curr_range
+    wick_ratio_sell = upper_wick / curr_range
+
+    recent_lows = lows[-21:-1]
+    recent_highs = highs[-21:-1]
+    prev_min = min(recent_lows)
+    prev_max = max(recent_highs)
+
+    sweep_buy = (last["low"] < prev_min) and (last["close"] > prev_min)
+    sweep_sell = (last["high"] > prev_max) and (last["close"] < prev_max)
+
     score = 0
-    reasons = []
 
     if e9 > e21:
-        score += 1; reasons.append("زخم صاعد (EMA9>21)")
+        score += 1
     elif e9 < e21:
-        score -= 1; reasons.append("زخم هابط (EMA9<21)")
-
+        score -= 1
     if e21 > e50:
-        score += 1; reasons.append("اتجاه صاعد (EMA21>50)")
+        score += 1
     elif e21 < e50:
-        score -= 1; reasons.append("اتجاه هابط (EMA21<50)")
+        score -= 1
+    if hist[-1] > 0:
+        score += 1
+    elif hist[-1] < 0:
+        score -= 1
+
+    if last["low"] <= lower_band and wick_ratio_buy > 0.25:
+        score += 2
+    elif last["high"] >= upper_band and wick_ratio_sell > 0.25:
+        score -= 2
+
+    if sweep_buy:
+        score += 2
+    elif sweep_sell:
+        score -= 2
 
     if r > 55:
-        score += 1; reasons.append(f"RSI إيجابي ({r:.1f})")
+        score += 1
     elif r < 45:
-        score -= 1; reasons.append(f"RSI سلبي ({r:.1f})")
-
-    if hist[-1] > 0:
-        score += 1; reasons.append("MACD إيجابي")
-    elif hist[-1] < 0:
-        score -= 1; reasons.append("MACD سلبي")
+        score -= 1
 
     return {
         "score": score, "atr": round(a, 2), "ema200": round(e200, 2),
-        "last_price": round(closes[-1], 2), "support": sup, "resistance": res, "reasons": reasons
+        "last_price": round(last["close"], 2), "support": sup, "resistance": res,
+        "rsi": round(r, 1), "e9": round(e9, 2), "e21": round(e21, 2), "e50": round(e50, 2),
+        "sweep_buy": sweep_buy, "sweep_sell": sweep_sell,
+        "wick_buy": wick_ratio_buy > 0.25, "wick_sell": wick_ratio_sell > 0.25,
+        "macd_bull": hist[-1] > 0
     }
 
 
@@ -182,41 +217,72 @@ def build_decision(per_tf, live_price, data_source):
     atr_val = ref["atr"] if ref["atr"] > 0 else 5.0
     price = live_price or ref["last_price"]
     ema200 = ref.get("ema200", price)
-
     support = ref.get("support", price - 10)
     resistance = ref.get("resistance", price + 10)
 
+    # بناء التحليل النصي (الخبير)
+    trend_txt = "صاعد" if price > ema200 else "هابط"
+    analysis_txt = f"الاتجاه العام للذهب على الإطار الزمني (H1) هو **{trend_txt}**، حيث يتداول السعر {'فوق' if price > ema200 else 'تحت'} المتوسط المتحرك EMA 200. "
+
+    if composite >= 0.6:
+        analysis_txt += "مؤشرات الزخم تدعم المشترين، حيث تقع المتوسطات (EMA) في ترتيب إيجابي، مع تأكيد من MACD. "
+    elif composite <= -0.6:
+        analysis_txt += "مؤشرات الزخم تدعم البائعين، حيث تقع المتوسطات (EMA) في ترتيب سلبي، مع تأكيد هبوطي من MACD. "
+    else:
+        analysis_txt += "مؤشرات الزخم متضاربة بين الأطر الزمنية، مما يشير إلى حالة من التذبذب وغياب اتجاه واضح. "
+
+    analysis_txt += f"يقف مؤشر RSI عند {ref['rsi']} مما يدل على {'حيادية تميل للقوة' if ref['rsi'] > 50 else 'حيادية تميل للضعف'}. "
+
+    if ref['sweep_buy']:
+        analysis_txt += "علاوة على ذلك، أظهر السعر ارتداداً قوياً بعد مسح سيولة (Sweep) أسفل قاع سابق. "
+    elif ref['sweep_sell']:
+        analysis_txt += "علاوة على ذلك، أظهر السعر رفضاً قوياً بعد مسح سيولة (Sweep) أعلى قمة سابقة. "
+
+    if ref['wick_buy']:
+        analysis_txt += "ظهر ذيل شمعة سفلي طويل عند منطقة الطلب (Dark Band). "
+    elif ref['wick_sell']:
+        analysis_txt += "ظهر ذيل شمعة علوي طويل عند منطقة العرض (Dark Band). "
+
     signal = "WAIT"
     sl = tp1 = tp2 = tp3 = 0.0
-    reasons = ref.get("reasons", [])
     warning = ""
+    trade_plan = ""
 
-    # شرط الشراء (مع التأكد أن السعر ليس قريباً جداً من المقاومة)
     if composite >= 0.6 and price > ema200:
         if resistance - price < (atr_val * 0.5):
             signal = "WAIT"
             warning = "السعر قريب من مقاومة قوية، يفضل الانتظار."
+            analysis_txt += "ومع ذلك، السعر قريب جداً من مستوى مقاومة قوي مما يمنع الدخول في صفقة شراء."
         else:
             signal = "BUY"
             sl = round(price - 1.5 * atr_val, 2)
-            tp1, tp2, tp3 = round(price + 1.5 * atr_val, 2), round(price + 3.0 * atr_val, 2), round(
-                price + 4.5 * atr_val, 2)
+            tp1 = round(price + 1.5 * atr_val, 2)
+            tp2 = round(price + 3.0 * atr_val, 2)
+            tp3 = round(price + 4.5 * atr_val, 2)
+            trade_plan = f"1️⃣ أغلق 50% عند TP1 ({tp1})\n2️⃣ انقل وقف الخسارة للدخول ({price})\n3️⃣ استخدم تريلينج ستوب بعد TP2 ({tp2})"
+            analysis_txt += "السعر يبتعد بشكل جيد عن مستويات المقاومة، مما يمنح الصفقة مساحة للتحرك نحو الأهداف."
 
-    # شرط البيع (مع التأكد أن السعر ليس قريباً جداً من الدعم)
     elif composite <= -0.6 and price < ema200:
         if price - support < (atr_val * 0.5):
             signal = "WAIT"
             warning = "السعر قريب من دعم قوي، يفضل الانتظار."
+            analysis_txt += "ومع ذلك، السعر قريب جداً من مستوى دعم قوي مما يمنع الدخول في صفقة بيع."
         else:
             signal = "SELL"
             sl = round(price + 1.5 * atr_val, 2)
-            tp1, tp2, tp3 = round(price - 1.5 * atr_val, 2), round(price - 3.0 * atr_val, 2), round(
-                price - 4.5 * atr_val, 2)
+            tp1 = round(price - 1.5 * atr_val, 2)
+            tp2 = round(price - 3.0 * atr_val, 2)
+            tp3 = round(price - 4.5 * atr_val, 2)
+            trade_plan = f"1️⃣ أغلق 50% عند TP1 ({tp1})\n2️⃣ انقل وقف الخسارة للدخول ({price})\n3️⃣ استخدم تريلينج ستوب بعد TP2 ({tp2})"
+            analysis_txt += "السعر يبتعد بشكل جيد عن مستويات الدعم، مما يمنح الصفقة مساحة للتحرك نحو الأهداف."
+    else:
+        analysis_txt += "بناءً على توافق المؤشرات الحالي، لا توجد فرصة تداول واضحة في هذه اللحظة، والانتظار هو القرار الأفضل."
 
     return {
         "signal": signal, "entry_price": round(price, 2), "stop_loss": sl,
         "tp1": tp1, "tp2": tp2, "tp3": tp3, "data_source": data_source,
-        "reasons": reasons, "warning": warning, "support": support, "resistance": resistance
+        "warning": warning, "support": support, "resistance": resistance,
+        "trade_plan": trade_plan, "analysis_text": analysis_txt
     }
 
 
@@ -233,27 +299,6 @@ def api_analyze():
         candles, _ = fetch_candles(t, 250, live)
         per_tf[t] = analyze_timeframe(candles, t)
     return build_decision(per_tf, live, "live")
-
-
-@app.get("/api/telegram")
-def send_telegram(signal: str, entry: float, sl: float, tp1: float):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return {"status": "error", "message": "لم يتم إعداد التليجرام في Render"}
-
-    msg = f"🏆 إشارة تداول الذهب 🏆\n\n"
-    msg += f"الاتجاه: {signal}\n"
-    msg += f"سعر الدخول: {entry}\n"
-    msg += f"وقف الخسارة: {sl}\n"
-    msg += f"الهدف الأول: {tp1}\n\n"
-    msg += f"بالتوفيق! 🚀"
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
-    try:
-        requests.post(url, json=payload, timeout=5)
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -274,12 +319,12 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
 .card{display:none;margin-top:15px;background:#0d1117;padding:15px;border-radius:10px;text-align:right}
 .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #21262d;font-size:14px}
 .row:last-child{border-bottom:none}
-.reasons{font-size:12px;color:#8b949e;margin-top:10px;text-align:right;line-height:1.6}
+.analysis-box{background:rgba(88,166,255,0.1);border-right:4px solid #58a6ff;padding:12px;border-radius:8px;margin-top:10px;margin-bottom:15px;font-size:13px;line-height:1.8;color:#c9d1d9;text-align:justify}
 .warning-box{background:rgba(248,81,73,0.1);border:1px solid #f85149;padding:10px;border-radius:8px;margin-top:10px;font-size:13px;color:#f85149;display:none}
+.plan-box{background:rgba(63,185,80,0.1);border:1px solid #3fb950;padding:12px;border-radius:8px;margin-top:10px;font-size:13px;color:#3fb950;display:none;line-height:1.8}
 .calc-box{background:#161b22;padding:15px;border-radius:10px;margin-top:15px;text-align:right;border:1px solid #30363d}
 .calc-box input{width:100%;padding:8px;margin:5px 0;border-radius:5px;border:1px solid #30363d;background:#0d1117;color:#fff;box-sizing:border-box}
 .calc-box button{width:100%;padding:10px;margin-top:10px;background:#238636;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:bold}
-.telegram-btn{background:#0088cc;color:#fff;padding:10px;border:none;border-radius:8px;width:100%;font-size:14px;font-weight:bold;cursor:pointer;margin-top:15px;display:none}
 </style></head>
 <body>
 <div class="box">
@@ -290,6 +335,9 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
 
   <div id="result" class="card">
     <div style="text-align:center;margin-bottom:10px"><span id="signal" style="background:#444;padding:6px 20px;border-radius:15px;font-weight:bold">--</span></div>
+
+    <div id="analysisBox" class="analysis-box"></div>
+
     <div class="row"><span>الدخول:</span> <b id="entry">--</b></div>
     <div class="row"><span>وقف الخسارة:</span> <b style="color:#f85149" id="sl">--</b></div>
     <div class="row"><span>TP1:</span> <b style="color:#3fb950" id="tp1">--</b></div>
@@ -299,9 +347,8 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
     <div class="row"><span>المقاومة:</span> <b id="resistance" style="color:#58a6ff">--</b></div>
 
     <div id="warningBox" class="warning-box"></div>
-    <div id="reasonsList" class="reasons"></div>
+    <div id="tradePlan" class="plan-box"></div>
 
-    <!-- حاسبة المخاطر -->
     <div class="calc-box" id="calcBox">
       <div style="font-weight:bold;margin-bottom:10px;color:#e3b341">🧮 حاسبة إدارة المخاطر</div>
       <input type="number" id="balance" placeholder="رصيد الحساب (مثال: 1000)">
@@ -309,14 +356,11 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
       <button onclick="calcLot()">حساب حجم العقد (اللوت)</button>
       <div id="lotResult" style="margin-top:10px;font-weight:bold;color:#3fb950;text-align:center"></div>
     </div>
-
-    <button class="telegram-btn" id="telegramBtn" onclick="sendTelegram()">✈️ إرسال الإشارة إلى التليجرام</button>
   </div>
 </div>
 
 <script>
 let currentData = null;
-
 if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js'); }
 setInterval(async()=>{ let r=await fetch('/api/price'); let d=await r.json(); if(d.price) document.getElementById('livePrice').innerText='$'+d.price; },10000);
 
@@ -325,7 +369,8 @@ async function startAnalysis(){
   currentData = d;
 
   let s=document.getElementById('signal');
-  s.innerText=d.signal; s.style.background=d.signal==='BUY'?'#238636':d.signal==='SELL'?'#da3633':'#484f58';
+  s.innerText=d.signal==='BUY'?'شراء BUY':d.signal==='SELL'?'بيع SELL':'انتظار WAIT'; 
+  s.style.background=d.signal==='BUY'?'#238636':d.signal==='SELL'?'#da3633':'#484f58';
 
   const f=(v)=>v?v:'--';
   document.getElementById('entry').innerText=f(d.entry_price);
@@ -336,19 +381,22 @@ async function startAnalysis(){
   document.getElementById('support').innerText=f(d.support);
   document.getElementById('resistance').innerText=f(d.resistance);
 
-  // Reasons
-  let rl = document.getElementById('reasonsList');
-  rl.innerHTML = "<b>الأسباب:</b><br>• " + d.reasons.join("<br>• ");
+  // التحليل النصي
+  document.getElementById('analysisBox').innerHTML = "<b>📝 التحليل الفني المفصل:</b><br>" + d.analysis_text;
 
-  // Warning
   let wb = document.getElementById('warningBox');
   if (d.warning) { wb.style.display='block'; wb.innerText = "⚠️ " + d.warning; }
   else { wb.style.display='none'; }
 
-  // Show/Hide buttons
-  document.getElementById('telegramBtn').style.display = (d.signal !== 'WAIT') ? 'block' : 'none';
-  document.getElementById('calcBox').style.display = (d.signal !== 'WAIT') ? 'block' : 'none';
+  let tp = document.getElementById('tradePlan');
+  if (d.trade_plan && d.signal !== 'WAIT') { 
+      tp.style.display='block'; 
+      tp.innerHTML = "<b>📋 خطة إدارة الصفقة:</b><br>" + d.trade_plan.replace(/\\n/g, "<br>"); 
+  } else { 
+      tp.style.display='none'; 
+  }
 
+  document.getElementById('calcBox').style.display = (d.signal !== 'WAIT') ? 'block' : 'none';
   document.getElementById('result').style.display='block';
 }
 
@@ -357,30 +405,11 @@ function calcLot(){
   let balance = parseFloat(document.getElementById('balance').value);
   let riskPct = parseFloat(document.getElementById('risk').value);
   if(!balance || !riskPct) return alert("أدخل الرصيد ونسبة المخاطرة");
-
   let riskAmount = (balance * riskPct) / 100;
   let distance = Math.abs(currentData.entry_price - currentData.stop_loss);
   if(distance === 0) return;
-
-  // معادلة اللوت للذهب (1 لوت = 100 أونصة، أي حركة 1 دولار = 100 دولار ربح/خسارة)
   let lotSize = riskAmount / (distance * 100);
   document.getElementById('lotResult').innerText = "حجم العقد المناسب: " + lotSize.toFixed(2) + " لوت";
-}
-
-async function sendTelegram(){
-  if(!currentData || currentData.signal === 'WAIT') return;
-  let btn = document.getElementById('telegramBtn');
-  btn.innerText = "جاري الإرسال...";
-  let url = `/api/telegram?signal=${currentData.signal}&entry=${currentData.entry_price}&sl=${currentData.stop_loss}&tp1=${currentData.tp1}`;
-  let r = await fetch(url);
-  let d = await r.json();
-  if(d.status === 'success'){
-    btn.innerText = "✅ تم الإرسال بنجاح!";
-    btn.style.background = "#238636";
-  } else {
-    alert("خطأ: " + d.message + "\n(تأكد من إعداد التوكن في Render)");
-    btn.innerText = "✈️ إعادة المحاولة";
-  }
 }
 </script></body></html>
 """
