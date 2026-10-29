@@ -2,17 +2,15 @@ from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
 import uvicorn, urllib.request, json, math, time, requests, os
 
-app = FastAPI(title="Gold AI Analyzer Pro", version="13.0")
+app = FastAPI(title="TRADLI Gold Pro", version="13.0")
 
 TWELVE_DATA_API_KEY = os.environ.get("TWELVE_DATA_API_KEY", "07f70213d88f4a058afb2f9d1d765f61")
 ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-
 
 @app.get("/icon.png")
 def get_icon():
     import base64
     return Response(content=base64.b64decode(ICON_BASE64), media_type="image/png")
-
 
 @app.get("/manifest.json")
 def get_manifest():
@@ -23,15 +21,12 @@ def get_manifest():
                   {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}]
     }
 
-
 @app.get("/sw.js")
 def get_sw():
     return Response(content="self.addEventListener('fetch', function(event) {});", media_type="application/javascript")
 
-
 _cache = {}
 _cache_time = {}
-
 
 def get_live_gold_price():
     try:
@@ -41,7 +36,6 @@ def get_live_gold_price():
     except Exception:
         pass
     return None
-
 
 def _fetch_twelvedata(interval, limit=200):
     now = time.time()
@@ -68,12 +62,10 @@ def _fetch_twelvedata(interval, limit=200):
     except Exception:
         return None
 
-
 def fetch_candles(interval, limit=200, base_price=None):
     c = _fetch_twelvedata(interval, limit)
     if c and len(c) >= 60: return c, "live"
     return [], "synthetic"
-
 
 def ema(values, period):
     if not values: return []
@@ -82,11 +74,9 @@ def ema(values, period):
     for v in values[1:]: out.append(v * k + out[-1] * (1 - k))
     return out
 
-
 def sma(values, period):
     if len(values) < period: return values[-1]
     return sum(values[-period:]) / period
-
 
 def rsi(closes, period=14):
     if len(closes) < period + 1: return [50.0] * len(closes)
@@ -94,8 +84,7 @@ def rsi(closes, period=14):
     gains, losses = [], []
     for i in range(1, len(closes)):
         d = closes[i] - closes[i - 1]
-        gains.append(max(d, 0.0));
-        losses.append(max(-d, 0.0))
+        gains.append(max(d, 0.0)); losses.append(max(-d, 0.0))
     ag, al = sum(gains[:period]) / period, sum(losses[:period]) / period
     out[period] = 100 - 100 / (1 + (ag / al if al else 100))
     for i in range(period + 1, len(closes)):
@@ -105,15 +94,13 @@ def rsi(closes, period=14):
         out[i] = 100 - 100 / (1 + (ag / al if al else 100))
     return out
 
-
 def macd(closes, f=12, s=26, sig=9):
-    if len(closes) < s + sig: return [0.0] * len(closes), [0.0] * len(closes), [0.0] * len(closes)
+    if len(closes) < s + sig: return [0.0]*len(closes), [0.0]*len(closes), [0.0]*len(closes)
     ef, es = ema(closes, f), ema(closes, s)
     line = [a - b for a, b in zip(ef, es)]
     signal = ema(line, sig)
     hist = [a - b for a, b in zip(line, signal)]
     return line, signal, hist
-
 
 def atr(candles, period=14):
     if len(candles) < 2: return 1.0
@@ -124,85 +111,68 @@ def atr(candles, period=14):
     window = trs[-period:] if len(trs) >= period else trs
     return sum(window) / len(window)
 
-
 def get_support_resistance(candles):
     recent = candles[-50:]
     resistance = max(c["high"] for c in recent)
     support = min(c["low"] for c in recent)
     return round(support, 2), round(resistance, 2)
 
-
 def analyze_timeframe(candles, tf_name):
     closes = [c["close"] for c in candles]
     highs = [c["high"] for c in candles]
     lows = [c["low"] for c in candles]
-
+    
     last = candles[-1]
     curr_range = last["high"] - last["low"]
     if curr_range == 0: curr_range = 0.0001
-
+    
     e9, e21, e50 = (ema(closes, p)[-1] for p in (9, 21, 50))
     e200 = ema(closes, 200)[-1] if len(closes) >= 200 else closes[0]
     r = rsi(closes)[-1]
     line, sig, hist = macd(closes)
     a = atr(candles)
     sup, res = get_support_resistance(candles)
-
+    
     upper_band = sma(highs, 20) + (a * 0.5)
     lower_band = sma(lows, 20) - (a * 0.5)
-
+    
     lower_wick = min(last["open"], last["close"]) - last["low"]
     upper_wick = last["high"] - max(last["open"], last["close"])
     wick_ratio_buy = lower_wick / curr_range
     wick_ratio_sell = upper_wick / curr_range
-
+    
     recent_lows = lows[-21:-1]
     recent_highs = highs[-21:-1]
     prev_min = min(recent_lows)
     prev_max = max(recent_highs)
-
+    
     sweep_buy = (last["low"] < prev_min) and (last["close"] > prev_min)
     sweep_sell = (last["high"] > prev_max) and (last["close"] < prev_max)
 
     score = 0
-
-    if e9 > e21:
-        score += 1
-    elif e9 < e21:
-        score -= 1
-    if e21 > e50:
-        score += 1
-    elif e21 < e50:
-        score -= 1
-    if hist[-1] > 0:
-        score += 1
-    elif hist[-1] < 0:
-        score -= 1
-
-    if last["low"] <= lower_band and wick_ratio_buy > 0.25:
-        score += 2
-    elif last["high"] >= upper_band and wick_ratio_sell > 0.25:
-        score -= 2
-
-    if sweep_buy:
-        score += 2
-    elif sweep_sell:
-        score -= 2
-
-    if r > 55:
-        score += 1
-    elif r < 45:
-        score -= 1
+    
+    if e9 > e21: score += 1
+    elif e9 < e21: score -= 1
+    if e21 > e50: score += 1
+    elif e21 < e50: score -= 1
+    if hist[-1] > 0: score += 1
+    elif hist[-1] < 0: score -= 1
+        
+    if last["low"] <= lower_band and wick_ratio_buy > 0.25: score += 2
+    elif last["high"] >= upper_band and wick_ratio_sell > 0.25: score -= 2
+        
+    if sweep_buy: score += 2
+    elif sweep_sell: score -= 2
+        
+    if r > 55: score += 1
+    elif r < 45: score -= 1
 
     return {
         "score": score, "atr": round(a, 2), "ema200": round(e200, 2),
         "last_price": round(last["close"], 2), "support": sup, "resistance": res,
-        "rsi": round(r, 1), "e9": round(e9, 2), "e21": round(e21, 2), "e50": round(e50, 2),
-        "sweep_buy": sweep_buy, "sweep_sell": sweep_sell,
+        "rsi": round(r, 1), "sweep_buy": sweep_buy, "sweep_sell": sweep_sell,
         "wick_buy": wick_ratio_buy > 0.25, "wick_sell": wick_ratio_sell > 0.25,
-        "macd_bull": hist[-1] > 0
     }
-
 
 def build_decision(per_tf, live_price, data_source):
     weights = {"H4": 2.0, "H1": 1.5, "M15": 1.0, "M5": 0.7}
@@ -219,32 +189,27 @@ def build_decision(per_tf, live_price, data_source):
     ema200 = ref.get("ema200", price)
     support = ref.get("support", price - 10)
     resistance = ref.get("resistance", price + 10)
-
-    # بناء التحليل النصي (الخبير)
+    
     trend_txt = "صاعد" if price > ema200 else "هابط"
     analysis_txt = f"الاتجاه العام للذهب على الإطار الزمني (H1) هو **{trend_txt}**، حيث يتداول السعر {'فوق' if price > ema200 else 'تحت'} المتوسط المتحرك EMA 200. "
-
+    
     if composite >= 0.6:
         analysis_txt += "مؤشرات الزخم تدعم المشترين، حيث تقع المتوسطات (EMA) في ترتيب إيجابي، مع تأكيد من MACD. "
     elif composite <= -0.6:
         analysis_txt += "مؤشرات الزخم تدعم البائعين، حيث تقع المتوسطات (EMA) في ترتيب سلبي، مع تأكيد هبوطي من MACD. "
     else:
         analysis_txt += "مؤشرات الزخم متضاربة بين الأطر الزمنية، مما يشير إلى حالة من التذبذب وغياب اتجاه واضح. "
-
+        
     analysis_txt += f"يقف مؤشر RSI عند {ref['rsi']} مما يدل على {'حيادية تميل للقوة' if ref['rsi'] > 50 else 'حيادية تميل للضعف'}. "
-
-    if ref['sweep_buy']:
-        analysis_txt += "علاوة على ذلك، أظهر السعر ارتداداً قوياً بعد مسح سيولة (Sweep) أسفل قاع سابق. "
-    elif ref['sweep_sell']:
-        analysis_txt += "علاوة على ذلك، أظهر السعر رفضاً قوياً بعد مسح سيولة (Sweep) أعلى قمة سابقة. "
-
-    if ref['wick_buy']:
-        analysis_txt += "ظهر ذيل شمعة سفلي طويل عند منطقة الطلب (Dark Band). "
-    elif ref['wick_sell']:
-        analysis_txt += "ظهر ذيل شمعة علوي طويل عند منطقة العرض (Dark Band). "
+    
+    if ref['sweep_buy']: analysis_txt += "علاوة على ذلك، أظهر السعر ارتداداً قوياً بعد مسح سيولة (Sweep) أسفل قاع سابق. "
+    elif ref['sweep_sell']: analysis_txt += "علاوة على ذلك، أظهر السعر رفضاً قوياً بعد مسح سيولة (Sweep) أعلى قمة سابقة. "
+    
+    if ref['wick_buy']: analysis_txt += "ظهر ذيل شمعة سفلي طويل عند منطقة الطلب (Dark Band). "
+    elif ref['wick_sell']: analysis_txt += "ظهر ذيل شمعة علوي طويل عند منطقة العرض (Dark Band). "
 
     signal = "WAIT"
-    sl = tp1 = tp2 = tp3 = 0.0
+    sl = tp1 = tp2 = tp3 = 0.0 
     warning = ""
     trade_plan = ""
 
@@ -261,7 +226,7 @@ def build_decision(per_tf, live_price, data_source):
             tp3 = round(price + 4.5 * atr_val, 2)
             trade_plan = f"1️⃣ أغلق 50% عند TP1 ({tp1})\n2️⃣ انقل وقف الخسارة للدخول ({price})\n3️⃣ استخدم تريلينج ستوب بعد TP2 ({tp2})"
             analysis_txt += "السعر يبتعد بشكل جيد عن مستويات المقاومة، مما يمنح الصفقة مساحة للتحرك نحو الأهداف."
-
+            
     elif composite <= -0.6 and price < ema200:
         if price - support < (atr_val * 0.5):
             signal = "WAIT"
@@ -279,17 +244,15 @@ def build_decision(per_tf, live_price, data_source):
         analysis_txt += "بناءً على توافق المؤشرات الحالي، لا توجد فرصة تداول واضحة في هذه اللحظة، والانتظار هو القرار الأفضل."
 
     return {
-        "signal": signal, "entry_price": round(price, 2), "stop_loss": sl,
+        "signal": signal, "entry_price": round(price, 2), "stop_loss": sl, 
         "tp1": tp1, "tp2": tp2, "tp3": tp3, "data_source": data_source,
         "warning": warning, "support": support, "resistance": resistance,
         "trade_plan": trade_plan, "analysis_text": analysis_txt
     }
 
-
 @app.get("/api/price")
 def api_price():
     return {"price": get_live_gold_price()}
-
 
 @app.get("/api/analyze")
 def api_analyze():
@@ -299,7 +262,6 @@ def api_analyze():
         candles, _ = fetch_candles(t, 250, live)
         per_tf[t] = analyze_timeframe(candles, t)
     return build_decision(per_tf, live, "live")
-
 
 @app.get("/", response_class=HTMLResponse)
 def read_root():
@@ -335,7 +297,7 @@ body{background:#0b0e14;color:#fff;font-family:sans-serif;text-align:center;padd
 
   <div id="result" class="card">
     <div style="text-align:center;margin-bottom:10px"><span id="signal" style="background:#444;padding:6px 20px;border-radius:15px;font-weight:bold">--</span></div>
-
+    
     <div id="analysisBox" class="analysis-box"></div>
 
     <div class="row"><span>الدخول:</span> <b id="entry">--</b></div>
@@ -367,11 +329,11 @@ setInterval(async()=>{ let r=await fetch('/api/price'); let d=await r.json(); if
 async function startAnalysis(){
   let r=await fetch('/api/analyze'); let d=await r.json();
   currentData = d;
-
+  
   let s=document.getElementById('signal');
   s.innerText=d.signal==='BUY'?'شراء BUY':d.signal==='SELL'?'بيع SELL':'انتظار WAIT'; 
   s.style.background=d.signal==='BUY'?'#238636':d.signal==='SELL'?'#da3633':'#484f58';
-
+  
   const f=(v)=>v?v:'--';
   document.getElementById('entry').innerText=f(d.entry_price);
   document.getElementById('sl').innerText=f(d.stop_loss);
@@ -380,14 +342,13 @@ async function startAnalysis(){
   document.getElementById('tp3').innerText=f(d.tp3);
   document.getElementById('support').innerText=f(d.support);
   document.getElementById('resistance').innerText=f(d.resistance);
-
-  // التحليل النصي
+  
   document.getElementById('analysisBox').innerHTML = "<b>📝 التحليل الفني المفصل:</b><br>" + d.analysis_text;
-
+  
   let wb = document.getElementById('warningBox');
   if (d.warning) { wb.style.display='block'; wb.innerText = "⚠️ " + d.warning; }
   else { wb.style.display='none'; }
-
+  
   let tp = document.getElementById('tradePlan');
   if (d.trade_plan && d.signal !== 'WAIT') { 
       tp.style.display='block'; 
@@ -413,7 +374,6 @@ function calcLot(){
 }
 </script></body></html>
 """
-
 
 if __name__ == "__main__":
     uvicorn.run("gold_analyzer:app", host="0.0.0.0", port=8000)
