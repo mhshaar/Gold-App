@@ -15,8 +15,7 @@ _cache = {}
 _cache_time = {}
 _icon_cache = {}
 
-
-# ---------------------------------------------------------------- Icons (real PNG 192 / 512)
+# ---------------------------------------------------------------- Icons
 def make_icon_png(size):
     if size in _icon_cache:
         return _icon_cache[size]
@@ -46,21 +45,17 @@ def make_icon_png(size):
     _icon_cache[size] = png
     return png
 
-
 @app.get("/icon-192.png")
 def icon192():
     return Response(content=make_icon_png(192), media_type="image/png")
-
 
 @app.get("/icon-512.png")
 def icon512():
     return Response(content=make_icon_png(512), media_type="image/png")
 
-
 @app.get("/apple-touch-icon.png")
 def apple_icon():
     return Response(content=make_icon_png(192), media_type="image/png")
-
 
 @app.get("/manifest.json")
 def get_manifest():
@@ -88,7 +83,6 @@ def get_manifest():
         media_type="application/manifest+json",
     )
 
-
 @app.get("/sw.js")
 def get_sw():
     js = """
@@ -101,7 +95,6 @@ self.addEventListener('fetch', function(event){
     return Response(content=js, media_type="application/javascript",
                     headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
 
-
 # ---------------------------------------------------------------- Data
 def get_live_gold_price():
     try:
@@ -111,7 +104,6 @@ def get_live_gold_price():
     except Exception:
         pass
     return None
-
 
 def _fetch_twelvedata(interval, limit=200):
     now = time.time()
@@ -138,12 +130,10 @@ def _fetch_twelvedata(interval, limit=200):
     except Exception:
         return None
 
-
 def fetch_candles(interval, limit=200, base_price=None):
     c = _fetch_twelvedata(interval, limit)
     if c and len(c) >= 60: return c, "live"
     return [], "synthetic"
-
 
 # ---------------------------------------------------------------- Indicators
 def ema(values, period):
@@ -153,11 +143,9 @@ def ema(values, period):
     for v in values[1:]: out.append(v * k + out[-1] * (1 - k))
     return out
 
-
 def sma(values, period):
     if len(values) < period: return values[-1]
     return sum(values[-period:]) / period
-
 
 def rsi(closes, period=14):
     if len(closes) < period + 1: return [50.0] * len(closes)
@@ -176,7 +164,6 @@ def rsi(closes, period=14):
         out[i] = 100 - 100 / (1 + (ag / al if al else 100))
     return out
 
-
 def macd(closes, f=12, s=26, sig=9):
     if len(closes) < s + sig: return [0.0] * len(closes), [0.0] * len(closes), [0.0] * len(closes)
     ef, es = ema(closes, f), ema(closes, s)
@@ -184,7 +171,6 @@ def macd(closes, f=12, s=26, sig=9):
     signal = ema(line, sig)
     hist = [a - b for a, b in zip(line, signal)]
     return line, signal, hist
-
 
 def atr(candles, period=14):
     if len(candles) < 2: return 1.0
@@ -195,13 +181,11 @@ def atr(candles, period=14):
     window = trs[-period:] if len(trs) >= period else trs
     return sum(window) / len(window)
 
-
 def get_support_resistance(candles):
     recent = candles[-50:]
     resistance = max(c["high"] for c in recent)
     support = min(c["low"] for c in recent)
     return round(support, 2), round(resistance, 2)
-
 
 def analyze_timeframe(candles, tf_name):
     if not candles:
@@ -244,33 +228,21 @@ def analyze_timeframe(candles, tf_name):
 
     score = 0
 
-    if e9 > e21:
-        score += 1
-    elif e9 < e21:
-        score -= 1
-    if e21 > e50:
-        score += 1
-    elif e21 < e50:
-        score -= 1
-    if hist[-1] > 0:
-        score += 1
-    elif hist[-1] < 0:
-        score -= 1
+    if e9 > e21: score += 1
+    elif e9 < e21: score -= 1
+    if e21 > e50: score += 1
+    elif e21 < e50: score -= 1
+    if hist[-1] > 0: score += 1
+    elif hist[-1] < 0: score -= 1
 
-    if last["low"] <= lower_band and wick_ratio_buy > 0.25:
-        score += 2
-    elif last["high"] >= upper_band and wick_ratio_sell > 0.25:
-        score -= 2
+    if last["low"] <= lower_band and wick_ratio_buy > 0.25: score += 2
+    elif last["high"] >= upper_band and wick_ratio_sell > 0.25: score -= 2
 
-    if sweep_buy:
-        score += 2
-    elif sweep_sell:
-        score -= 2
+    if sweep_buy: score += 2
+    elif sweep_sell: score -= 2
 
-    if r > 55:
-        score += 1
-    elif r < 45:
-        score -= 1
+    if r > 55: score += 1
+    elif r < 45: score -= 1
 
     return {
         "score": score, "atr": round(a, 2), "ema200": round(e200, 2),
@@ -278,7 +250,6 @@ def analyze_timeframe(candles, tf_name):
         "rsi": round(r, 1), "sweep_buy": sweep_buy, "sweep_sell": sweep_sell,
         "wick_buy": wick_ratio_buy > 0.25, "wick_sell": wick_ratio_sell > 0.25,
     }
-
 
 def build_decision(per_tf, live_price, data_source):
     weights = {"H4": 2.0, "H1": 1.5, "M15": 1.0, "M5": 0.7}
@@ -299,9 +270,9 @@ def build_decision(per_tf, live_price, data_source):
     trend_txt = "صاعد" if price > ema200 else "هابط"
     analysis_txt = f"الاتجاه العام للذهب على الإطار الزمني (H1) هو <b>{trend_txt}</b>، حيث يتداول السعر {'فوق' if price > ema200 else 'تحت'} المتوسط المتحرك EMA 200. "
 
-    if composite >= 0.6:
+    if composite >= 1.0:
         analysis_txt += "مؤشرات الزخم تدعم المشترين، حيث تقع المتوسطات (EMA) في ترتيب إيجابي، مع تأكيد من MACD. "
-    elif composite <= -0.6:
+    elif composite <= -1.0:
         analysis_txt += "مؤشرات الزخم تدعم البائعين، حيث تقع المتوسطات (EMA) في ترتيب سلبي، مع تأكيد هبوطي من MACD. "
     else:
         analysis_txt += "مؤشرات الزخم متضاربة بين الأطر الزمنية، مما يشير إلى حالة من التذبذب وغياب اتجاه واضح. "
@@ -323,7 +294,8 @@ def build_decision(per_tf, live_price, data_source):
     warning = ""
     trade_plan = ""
 
-    if composite >= 0.6 and price > ema200:
+    # ✅ إصلاح الخطأ هنا
+    if composite >= 1.0 and price > ema200:
         if resistance - price < (atr_val * 0.5):
             signal = "WAIT"
             warning = "السعر قريب من مقاومة قوية، يفضل الانتظار."
@@ -337,7 +309,7 @@ def build_decision(per_tf, live_price, data_source):
             trade_plan = f"1️⃣ أغلق 50% عند TP1 ({tp1})\n2️⃣ انقل وقف الخسارة للدخول ({price})\n3️⃣ استخدم تريلينج ستوب بعد TP2 ({tp2})"
             analysis_txt += "السعر يبتعد بشكل جيد عن مستويات المقاومة، مما يمنح الصفقة مساحة للتحرك نحو الأهداف."
 
-    elif composite <= -0.6 and price < ema200:
+    elif composite <= -1.0 and price < ema200:
         if price - support < (atr_val * 0.5):
             signal = "WAIT"
             warning = "السعر قريب من دعم قوي، يفضل الانتظار."
@@ -360,12 +332,10 @@ def build_decision(per_tf, live_price, data_source):
         "trade_plan": trade_plan, "analysis_text": analysis_txt
     }
 
-
 # ---------------------------------------------------------------- API
 @app.get("/api/price")
 def api_price():
     return {"price": get_live_gold_price()}
-
 
 @app.get("/api/analyze")
 def api_analyze():
@@ -378,7 +348,6 @@ def api_analyze():
     _last_decision.clear()
     _last_decision.update(decision)
     return decision
-
 
 @app.post("/api/telegram")
 def send_telegram():
@@ -417,7 +386,6 @@ def send_telegram():
         return {"status": "error", "message": "تليجرام رفض الرسالة: " + str(data.get("description", "خطأ غير معروف"))}
     except Exception as e:
         return {"status": "error", "message": "تعذر الاتصال بتليجرام: " + str(e)}
-
 
 @app.get("/", response_class=HTMLResponse)
 def read_root():
@@ -596,7 +564,6 @@ async function sendTelegram(){
 }
 </script></body></html>
 """
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
